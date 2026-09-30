@@ -4,7 +4,23 @@
 
 const STORE = "https://winela.com.br";
 const CACHE_MS = 60 * 60 * 1000; // atualiza o catálogo a cada 1 hora
-let cache = { text: "", at: 0 };
+let cache = { text: "", at: 0, handles: [] };
+
+// Garante que todo link de produto aponte para uma página que existe.
+function fixLinks(text, handles) {
+  return text.replace(/https?:\/\/(?:www\.)?winela\.com\.br\/products\/([a-z0-9\-]+)/gi, (full, slug) => {
+    slug = slug.toLowerCase();
+    if (handles.includes(slug)) return `${STORE}/products/${slug}`;
+    const words = slug.split("-").filter((w) => w.length > 2);
+    let best = null, bestScore = 0;
+    for (const h of handles) {
+      const score = words.filter((w) => h.includes(w)).length + (h.startsWith(slug) ? 5 : 0);
+      if (score > bestScore) { best = h; bestScore = score; }
+    }
+    if (best && bestScore >= Math.min(2, words.length)) return `${STORE}/products/${best}`;
+    return `${STORE}/search?q=${encodeURIComponent(words.join(" "))}&type=product`;
+  });
+}
 
 const PERSONA = `Você é Maya, a sommelier virtual da Winela, loja especializada em vinhos brasileiros de alta qualidade.
 
@@ -50,7 +66,7 @@ async function getCatalog() {
       const tags = (p.tags || []).map((t) => t.replace(/^#/, "")).join(", ");
       return `- [${p.title}](${STORE}/products/${p.handle}) | ${promo}${tags ? ` | tags: ${tags}` : ""}\n  ${clean(p.body_html)}`;
     });
-  cache = { text: lines.join("\n"), at: Date.now() };
+  cache = { text: lines.join("\n"), at: Date.now(), handles: products.map((p) => p.handle) };
   return cache.text;
 }
 
@@ -62,7 +78,6 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: "Messages array is required" });
   }
 
-  // A primeira mensagem de boas-vindas é da Maya; a API exige começar pelo usuário.
   const apiMessages = messages.filter((m, i) => !(i === 0 && m.role === "assistant")).slice(-20);
 
   try {
@@ -92,7 +107,7 @@ export default async function handler(req, res) {
     }
 
     const data = await response.json();
-    const text = data.content?.map((b) => b.text || "").join("") || "";
+    const text = fixLinks(data.content?.map((b) => b.text || "").join("") || "", cache.handles);
     return res.status(200).json({ text });
   } catch (error) {
     console.error("Error:", error);
